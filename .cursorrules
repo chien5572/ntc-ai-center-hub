@@ -1,0 +1,9 @@
+﻿# Cursor Agent Rules
+
+<!-- HARNESS:BEGIN -->
+Always adhere strictly to the Atomic Engineering Protocol defined in AGENTS.md and docs/WORKFLOW.md.
+- Hierarchy of Truth: SPEC.md > AGENTS.md > docs/plans/system-roadmap.md > docs/plans/active/<module>/phase-*.md.
+- Never write production code during Gate 1 (Specification Ingestion) or Gate 2 (Roadmap Alignment).
+- Implement exactly ONE Atomic Task per turn. Never generate incomplete stubs (no TODOs).
+- Update the ðŸŽ« Resume Ticket in the active dossier before concluding any turn.
+<!-- HARNESS:END -->

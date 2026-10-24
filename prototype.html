@@ -1,0 +1,720 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+<meta charset="utf-8">
+<title>ntc-ai-center-hub — Prototype vận hành</title>
+<script src="https://www.gstatic.com/antigravity/web/dev/tailwindcss.min.js"></script>
+<style>
+  .mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
+  .bubble b{font-weight:600}
+  .scroll-thin::-webkit-scrollbar{width:6px}
+  .scroll-thin::-webkit-scrollbar-thumb{background:var(--border);border-radius:3px}
+  .tab-active{background:var(--primary);color:var(--primary-foreground)}
+  .term{background:#0b0f14;color:#d1e7d1}
+  .term .dim{color:#7d8b99}.term .ok{color:#7ee787}.term .warn{color:#f2cc60}.term .err{color:#ff7b72}.term .cmd{color:#79c0ff}
+  .pulse{animation:p 1.2s infinite}@keyframes p{50%{opacity:.35}}
+</style>
+</head>
+<body class="bg-[var(--background)] text-[var(--foreground)] antialiased p-4">
+<div class="max-w-[1200px] mx-auto">
+  <!-- Header -->
+  <div class="flex flex-wrap items-center gap-3 mb-3">
+    <div>
+      <div class="text-lg font-semibold">ntc-ai-center-hub · Prototype vận hành</div>
+      <div class="text-xs text-[var(--muted-foreground)]">Bản demo giả lập — một bộ não (hubd), ba cửa vào. Agent, model, link đều là dữ liệu mẫu.</div>
+    </div>
+    <div class="ml-auto flex items-center gap-2 text-sm">
+      <div id="tabs" class="flex gap-1 p-1 rounded-lg border border-[var(--border)] bg-[var(--card)]"></div>
+      <select id="speed" class="text-sm rounded-md border border-[var(--border)] bg-[var(--card)] px-2 py-1">
+        <option value="1">Tốc độ 1×</option><option value="2" selected>Tốc độ 2×</option><option value="4">Tốc độ 4×</option>
+      </select>
+      <button onclick="location.reload()" class="text-sm rounded-md border border-[var(--border)] bg-[var(--card)] px-3 py-1">↺ Làm lại</button>
+    </div>
+  </div>
+  <div class="text-sm mb-3 rounded-lg border border-[var(--border)] bg-[var(--card)] px-3 py-2">
+    💡 <b>Thử thế này:</b> Telegram → topic <b>General</b> → bấm chip <span class="mono">/new …</span> → trả lời phỏng vấn → <span class="mono">/go</span>.
+    Khi bot hỏi duyệt, thử duyệt ở tab <b>Webapp</b> hoặc gõ <span class="mono">hub approve 12</span> ở tab <b>CLI</b>: cả ba cửa dùng chung một task.
+    Task <b>#9</b> chạy song song ở nền.
+  </div>
+
+  <!-- TELEGRAM -->
+  <div id="v-tg" class="grid grid-cols-[250px_1fr] h-[640px] border border-[var(--border)] rounded-xl overflow-hidden bg-[var(--card)]">
+    <div class="border-r border-[var(--border)] flex flex-col min-h-0">
+      <div class="px-3 py-3 border-b border-[var(--border)]">
+        <div class="font-semibold text-sm">🤖 NTC Hub Group</div>
+        <div class="text-xs text-[var(--muted-foreground)]">Nhóm Telegram · Topics</div>
+      </div>
+      <div id="tg-topics" class="flex-1 overflow-y-auto scroll-thin"></div>
+    </div>
+    <div class="flex flex-col min-h-0">
+      <div id="tg-head" class="px-4 py-2 border-b border-[var(--border)]"></div>
+      <div id="tg-pin"></div>
+      <div id="tg-msgs" class="flex-1 overflow-y-auto scroll-thin p-4 space-y-2 bg-[var(--background)]"></div>
+      <div id="tg-chips" class="px-3 pt-2 flex flex-wrap gap-2"></div>
+      <form id="tg-form" class="p-3 flex gap-2">
+        <input id="tg-input" autocomplete="off" placeholder="Nhập tin nhắn hoặc lệnh /…" class="flex-1 rounded-lg border border-[var(--border)] bg-[var(--background)] px-3 py-2 text-sm outline-none">
+        <button class="rounded-lg px-4 text-sm bg-[var(--primary)] text-[var(--primary-foreground)]">Gửi</button>
+      </form>
+    </div>
+  </div>
+
+  <!-- CLI -->
+  <div id="v-cli" class="hidden border border-[var(--border)] rounded-xl overflow-hidden">
+    <div class="term px-3 py-1.5 text-xs dim border-b border-[#1f2937] flex justify-between"><span>ssh ntchub@my-vps — hub CLI</span><span id="cli-follow"></span></div>
+    <div id="cli-out" class="term mono text-[13px] h-[520px] overflow-y-auto scroll-thin p-3 whitespace-pre-wrap"></div>
+    <div id="cli-chips" class="term px-3 py-2 flex flex-wrap gap-2 border-t border-[#1f2937]"></div>
+    <form id="cli-form" class="term mono text-[13px] flex items-center gap-2 px-3 py-2 border-t border-[#1f2937]">
+      <span class="ok">ntchub@vps:~$</span>
+      <input id="cli-input" autocomplete="off" class="flex-1 bg-transparent outline-none text-[#d1e7d1]" placeholder="gõ lệnh, ví dụ: hub tasks">
+    </form>
+  </div>
+
+  <!-- WEBAPP -->
+  <div id="v-web" class="hidden grid grid-cols-[210px_1fr] h-[640px] border border-[var(--border)] rounded-xl overflow-hidden bg-[var(--card)]">
+    <div id="web-nav" class="border-r border-[var(--border)] p-3 space-y-1"></div>
+    <div id="web-main" class="overflow-y-auto scroll-thin p-5 bg-[var(--background)]"></div>
+  </div>
+</div>
+
+<script>
+/* ================== STATE ================== */
+const MODELS = {
+  'claude-code': ['claude-opus-5.5','claude-sonnet-5.5'],
+  'codex': ['gpt-5.5-codex','gpt-5.5-mini'],
+  'antigravity': ['gemini-3.8-flash','gemini-4.0-argon','claude-opus-5.5','claude-sonnet-5.5'],
+  'deepseek': ['deepseek-v4','deepseek-v4-lite'],
+};
+const ROLES = [
+  ['interview','Phỏng vấn'],['plan','Lên plan'],['code','Code'],['test','Test'],
+  ['review','Review'],['fix','Fix bug'],['reproduce','Tái hiện bug'],['report','Báo cáo'],
+];
+const PRESET_MULTI = {
+  interview:{h:'antigravity',m:'gemini-3.8-flash'}, plan:{h:'claude-code',m:'claude-opus-5.5'},
+  code:{h:'codex',m:'gpt-5.5-codex'}, test:{h:'antigravity',m:'gemini-3.8-flash'},
+  review:{h:'antigravity',m:'gemini-4.0-argon'}, fix:{h:'claude-code',m:'claude-sonnet-5.5'},
+  reproduce:{h:'claude-code',m:'claude-sonnet-5.5'}, report:{h:'deepseek',m:'deepseek-v4-lite'},
+};
+const PRESET_AG = {
+  interview:{h:'antigravity',m:'gemini-3.8-flash'}, plan:{h:'antigravity',m:'claude-opus-5.5'},
+  code:{h:'antigravity',m:'claude-sonnet-5.5'}, test:{h:'antigravity',m:'gemini-3.8-flash'},
+  review:{h:'antigravity',m:'gemini-4.0-argon'}, fix:{h:'antigravity',m:'claude-sonnet-5.5'},
+  reproduce:{h:'antigravity',m:'claude-sonnet-5.5'}, report:{h:'antigravity',m:'gemini-3.8-flash'},
+};
+const GATE_LABEL = {spec:'Duyệt spec',plan:'Duyệt plan',merge:'Duyệt merge',deploy_staging:'Deploy staging',deploy_prod:'Deploy production'};
+
+const S = {
+  speed: 2, view: 'tg', tgTopic: 'general', webPage: 'dash', webTask: 9,
+  general: [], tasks: [], nextId: 12, mid: 0,
+  gates: {spec:true, plan:true, merge:true, deploy_staging:false, deploy_prod:true},
+  maxRounds: 3,
+  routes: JSON.parse(JSON.stringify(PRESET_MULTI)),
+  harness: {
+    'claude-code': {auth:'ok', quota:41, limit:2, via:'OAuth · Claude Max'},
+    'codex': {auth:'expired', quota:0, limit:2, via:'OAuth · ChatGPT Plus'},
+    'antigravity': {auth:'ok', quota:63, limit:3, via:'OAuth · Google AI Ultra'},
+    'deepseek': {auth:'ok', quota:null, limit:2, via:'API key · DeepSeek (dự phòng)'},
+  },
+  cli: {lines: [], follow: null},
+  unread: {},
+};
+
+/* ================== HELPERS ================== */
+const sleep = ms => new Promise(r => setTimeout(r, ms / S.speed));
+const esc = s => String(s).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+const now = () => new Date().toTimeString().slice(0,5);
+const T = id => S.tasks.find(t => t.id == id);
+const CANCEL = new Error('cancelled');
+
+function post(t, from, html, opts = {}) {
+  const m = {id: ++S.mid, from, html, buttons: opts.buttons || null, done: null, time: now()};
+  const key = t ? t.id : 'general';
+  (t ? t.msgs : S.general).push(m);
+  if (S.view !== 'tg' || S.tgTopic != key) S.unread[key] = (S.unread[key] || 0) + 1;
+  render();
+  return m;
+}
+function log(t, text) {
+  const line = {time: now(), text};
+  t.logs.push(line);
+  if (S.cli.follow == t.id) cliPrint(`<span class="dim">${line.time}</span> ${esc(text)}`);
+  if (S.view === 'web') render();
+}
+function findMsg(id) {
+  for (const m of S.general) if (m.id === id) return m;
+  for (const t of S.tasks) for (const m of t.msgs) if (m.id === id) return m;
+}
+function newTask(o) {
+  const t = Object.assign({
+    id: S.nextId++, kind: 'new', project: '', slug: '', status: 'interviewing', stage: 'Phỏng vấn',
+    msgs: [], logs: [], timeline: [], usage: {}, pin: '', pending: null, awaitingComment: false,
+    auto: false, iv: {step: 0, answers: []}, chips: [], tests: null, reviews: null, extra: [], startedAt: Date.now(),
+  }, o);
+  S.tasks.push(t);
+  return t;
+}
+
+/* ================== GATES ================== */
+function gate(t, name, html) {
+  const forced = name === 'deploy_prod';
+  if (!forced && (!S.gates[name] || t.auto)) {
+    post(t, 'bot', `⏭ Bỏ qua <b>${GATE_LABEL[name]}</b> (điểm duyệt đang tắt)`);
+    return Promise.resolve({decision: 'approve'});
+  }
+  return new Promise(res => {
+    const prevStatus = t.status, prevPin = t.pin;
+    t.status = 'waiting_approval';
+    t.pin = `⏸ Chờ bạn: ${GATE_LABEL[name]}`;
+    const m = post(t, 'bot', html, {buttons: [
+      {label: '✅ Duyệt', fn: () => resolveGate(t, 'approve', 'Telegram')},
+      {label: '💬 Góp ý', fn: () => askComment(t)},
+      {label: '✖ Từ chối', fn: () => resolveGate(t, 'reject', 'Telegram')},
+    ]});
+    t.pending = {name, res, msg: m, prevStatus, prevPin};
+    log(t, `[hub] gate ${name}: chờ duyệt`);
+  });
+}
+function askComment(t) {
+  if (!t.pending) return;
+  t.pending.msg.done = '💬 Đang chờ góp ý…';
+  t.awaitingComment = true;
+  post(t, 'bot', 'Bạn gõ góp ý nhé, agent sẽ làm lại chặng này theo góp ý.');
+}
+function resolveGate(t, decision, channel, comment) {
+  if (!t.pending) return false;
+  const p = t.pending; t.pending = null; t.awaitingComment = false;
+  const label = {approve: '✅ Đã duyệt', reject: '✖ Đã từ chối', comment: '💬 Đã góp ý'}[decision];
+  p.msg.done = label + (channel !== 'Telegram' ? ` (qua ${channel})` : '');
+  if (channel !== 'Telegram') post(t, 'bot', `${label} <b>${GATE_LABEL[p.name]}</b> qua <b>${channel}</b>.`);
+  log(t, `[hub] gate ${p.name}: ${decision} (${channel})`);
+  t.status = p.prevStatus === 'waiting_approval' ? 'running' : p.prevStatus;
+  t.pin = p.prevPin;
+  p.res({decision, comment});
+  render();
+  return true;
+}
+
+/* ================== PIPELINE ================== */
+const LOGS = {
+  plan: ['đọc spec.md + repo-summary', 'chia việc: 4 màn hình, API, ngân sách', 'ghi plan.md (9 bước)'],
+  code: ['dựng khung Next.js + Prisma + SQLite', 'viết API /expenses (CRUD)', 'viết màn Tổng quan, Thêm chi tiêu, Ngân sách', 'hub commit: hub(12): code round 0'],
+  test: ['viết test mới theo tiêu chí chấp nhận', 'chạy test trong container'],
+  review: ['đọc diff', 'kiểm tra bảo mật, xử lý lỗi, chất lượng test', 'ghi review.json'],
+  fix: ['đọc test-report.md + review.json', 'sửa các lỗi được nêu', 'hub commit: fix'],
+  reproduce: ['viết test tái hiện lỗi', 'xác nhận test fail đúng triệu chứng'],
+  report: ['tổng hợp kết quả từ stage runs, test, review'],
+};
+function routeFor(t, role) {
+  let r = {...S.routes[role]};
+  if (S.harness[r.h].auth !== 'ok') {
+    post(t, 'bot', `⚠️ <b>${r.h}</b> hết hạn đăng nhập → chuyển sang dự phòng <b>claude-code · claude-sonnet-5.5</b>. Gõ <span class="mono">/login ${r.h}</span> ở General để đăng nhập lại.`);
+    log(t, `[hub] ${r.h} auth expired → fallback claude-code/claude-sonnet-5.5`);
+    r = {h: 'claude-code', m: 'claude-sonnet-5.5'};
+  }
+  return r;
+}
+async function stage(t, role, label) {
+  if (t.status === 'cancelled') throw CANCEL;
+  const r = routeFor(t, role);
+  const item = {label, state: 'running', agent: `${r.h} · ${r.m}`, note: ''};
+  t.timeline.push(item);
+  t.status = 'running'; t.stage = label;
+  t.pin = `📌 ${label} — ${r.h} · ${r.m}`;
+  post(t, 'bot', `▶ <b>${label}</b> — <span class="mono text-xs">${r.h} · ${r.m}</span>`);
+  for (const line of LOGS[role] || []) {
+    await sleep(900);
+    if (t.status === 'cancelled') throw CANCEL;
+    log(t, `[${r.h}/${r.m}] ${line}`);
+  }
+  t.usage[r.m] = (t.usage[r.m] || 0) + 2 + Math.floor(Math.random() * 6);
+  item.state = 'done';
+  render();
+  return item;
+}
+async function runPipeline(t) {
+  try {
+    if (t.kind !== 'fix') {
+      // PLAN (+ gate)
+      while (true) {
+        await stage(t, 'plan', 'Lên plan');
+        const extra = t.extra.length ? `<br>• Bổ sung theo góp ý: ${t.extra.map(esc).join(', ')}` : '';
+        const g = await gate(t, 'plan', `📋 <b>Plan #${t.id}</b> (tóm tắt)<br>1. Khung Next.js + Prisma + SQLite<br>2. Đăng nhập email, nhóm gia đình 4 người<br>3. Màn: Tổng quan · Thêm chi tiêu · Ngân sách · Cài đặt<br>4. Cảnh báo vượt ngân sách<br>5. Test: Vitest + Playwright${extra}<br><span class="text-xs opacity-70">Chi tiết: plan.md trên Webapp</span>`);
+        if (g.decision === 'reject') throw CANCEL;
+        if (g.decision === 'comment') { t.extra.push(g.comment); post(t, 'bot', `🔁 Làm lại plan theo góp ý: “${esc(g.comment)}”`); continue; }
+        break;
+      }
+      await stage(t, 'code', 'Code');
+    } else {
+      await stage(t, 'reproduce', 'Tái hiện bug');
+      await stage(t, 'fix', 'Fix');
+    }
+    // TEST / REVIEW / FIX loop
+    let round = 0, ti = 0, ri = 0;
+    while (true) {
+      const it = await stage(t, 'test', round ? `Test (vòng ${round})` : 'Test');
+      log(t, `[hub] tự chạy test_cmd để xác minh: ${t.kind === 'fix' ? 'pytest -q' : 'npm test'}`);
+      await sleep(700);
+      const tr = (t.tests || [])[ti++] || {pass: true, text: 'tất cả pass'};
+      it.note = tr.text; it.state = tr.pass ? 'done' : 'failed';
+      post(t, 'bot', tr.pass ? `🧪 Hub chạy lại test: <b>${tr.text}</b>` : `❌ Hub chạy lại test: <b>${tr.text}</b> → chuyển sang Fix`);
+      if (tr.pass) {
+        const iv = await stage(t, 'review', round ? `Review (vòng ${round})` : 'Review');
+        const rv = (t.reviews || [])[ri++] || {ok: true, text: 'approve'};
+        iv.note = rv.text; iv.state = rv.ok ? 'done' : 'failed';
+        post(t, 'bot', rv.ok ? `👀 Review: <b>approve</b>` : `👀 Review: <b>${rv.text}</b> → chuyển sang Fix`);
+        if (rv.ok) break;
+      }
+      round++;
+      if (round > S.maxRounds) {
+        t.status = 'failed'; t.pin = '⛔ Dừng: vượt số vòng fix tối đa';
+        post(t, 'bot', `⛔ <b>#${t.id}</b> dừng: vượt ${S.maxRounds} vòng fix. Lỗi lặp lại: xem /logs. Gõ /resume để thử tiếp.`);
+        return;
+      }
+      await stage(t, 'fix', `Fix (vòng ${round})`);
+    }
+    await stage(t, 'report', 'Báo cáo');
+    sendReport(t);
+    if (!S.gates.merge || t.auto) { await sleep(800); doMerge(t, 'tự động'); }
+    else { t.status = 'awaiting_merge'; t.pin = '🔀 Xong — chờ bạn merge (không giữ slot chạy)'; render(); }
+  } catch (e) {
+    if (e !== CANCEL) throw e;
+    t.status = 'cancelled'; t.pin = '✖ Đã huỷ';
+    post(t, 'bot', `✖ Task #${t.id} đã huỷ. Branch được giữ lại để bạn xem.`);
+  }
+}
+function usageLine(t) {
+  return Object.entries(t.usage).map(([m, n]) => `${m.replace('claude-','').replace('gemini-','gemini ')} ${n}`).join(' · ') || '—';
+}
+function sendReport(t) {
+  const mins = 60 + Math.floor(Math.random() * 50);
+  const done = t.kind === 'fix'
+    ? 'Sửa checkout giỏ rỗng trả 500 → trả 400 + thông báo; thêm test hồi quy'
+    : `4 màn hình, API chi tiêu, đăng nhập email, ngân sách${t.extra.length ? ', ' + t.extra.map(esc).join(', ') : ''}`;
+  const test = t.kind === 'fix' ? '31/31 pass' : '50/50 pass';
+  const rv = t.kind === 'fix' ? 'approve' : 'approve (2 góp ý đã sửa)';
+  const warn = t.kind === 'fix' ? 'không có' : 'chưa gửi email thật (đang mock)';
+  t.pr = `github.com/chien/${t.project}/pull/${t.kind === 'fix' ? 57 : 1}`;
+  post(t, 'bot',
+    `✅ <b>#${t.id} ${t.slug} — HOÀN THÀNH</b> (${Math.floor(mins/60)}h${String(mins%60).padStart(2,'0')}m)<br>` +
+    `PR: <u>${t.pr}</u><br>Đã làm: ${done}<br>Test: ${test} · Review: ${rv}<br>⚠ Cần bạn xem: ${warn}<br>` +
+    `<span class="text-xs opacity-80">Quota: ${usageLine(t)}</span>`,
+    {buttons: [
+      {label: '🔗 Preview', fn: () => doPreview(t), keep: true},
+      {label: '🔀 Merge', fn: () => doMerge(t, 'Telegram'), keep: true},
+      {label: '📄 Chi tiết', fn: () => { S.view = 'web'; S.webPage = 'task'; S.webTask = t.id; render(); }, keep: true},
+    ]});
+}
+function doPreview(t) {
+  post(t, 'bot', `🔗 Preview đã sẵn sàng: <u>https://hub-${t.id}.preview.ntc.dev</u><br><span class="text-xs opacity-80">Sau Cloudflare Access · tự tắt sau 24h · /down để tắt sớm</span>`);
+  log(t, '[hub] preview: vercel preview deployment created');
+}
+function doMerge(t, channel) {
+  if (t.status !== 'awaiting_merge' && channel !== 'tự động') {
+    post(t, 'bot', t.status === 'done' ? 'PR đã được merge rồi.' : '⛔ Chưa thể merge: task chưa xong (hub chỉ merge khi test pass + review approve).');
+    return;
+  }
+  t.timeline.push({label: 'Merge', state: 'done', agent: 'hub', note: 'qua GitHub PR'});
+  t.status = 'done'; t.pin = '✅ Đã merge vào main';
+  post(t, 'bot', `🔀 Đã merge PR vào <b>main</b> (${channel}).<br>Hub kiểm tra: test pass ✓ · review approve ✓ · không xung đột ✓<br>Gõ <span class="mono">/deploy prod</span> khi muốn deploy.`);
+  log(t, `[hub] merge PR via GitHub API (${channel})`);
+}
+async function doDeploy(t, env) {
+  if (t.status !== 'done') { post(t, 'bot', '⛔ Cần merge trước khi deploy.'); return; }
+  const target = t.kind === 'fix' ? 'Docker trên VPS' : 'Vercel';
+  const g = await gate(t, env === 'prod' ? 'deploy_prod' : 'deploy_staging',
+    `🚀 <b>Deploy ${env}</b> cho <b>${t.project}</b><br>Target: ${target} · commit <span class="mono">a1b2c3d</span><br><span class="text-xs opacity-80">Điểm duyệt deploy prod luôn bật.</span>`);
+  if (g.decision !== 'approve') { post(t, 'bot', 'Đã huỷ deploy.'); return; }
+  post(t, 'bot', `⏳ Đang deploy lên ${target}…`);
+  log(t, `[hub] deploy ${env} → ${target}`);
+  await sleep(2500);
+  t.timeline.push({label: `Deploy ${env}`, state: 'done', agent: 'hub', note: target});
+  post(t, 'bot', `✅ Đã deploy <b>${env}</b>: <u>https://${t.project}.vercel.app</u> · /rollback ${t.project} ${env} nếu cần`);
+}
+
+/* ================== INTERVIEW ================== */
+const IVQ = [
+  {q: 'Ai sẽ dùng app này: chỉ bạn, hay cả gia đình cùng nhập chi tiêu?', chips: ['Cả gia đình, 4 người', 'Chỉ mình tôi']},
+  {q: 'Bạn muốn dùng trên điện thoại dạng web, hay app cài đặt?', chips: ['Web chạy tốt trên điện thoại', 'App Android/iOS']},
+  {q: 'Mỗi ngày mở app, bạn muốn thấy điều gì đầu tiên?', chips: ['Tổng chi tháng này theo danh mục', 'Còn bao nhiêu so với ngân sách']},
+];
+function startNew(idea, channel) {
+  const slug = /chi tiêu/i.test(idea) ? 'app-chi-tieu' : 'app-' + S.nextId;
+  const t = newTask({kind: 'new', project: slug, slug,
+    tests: [{pass: false, text: '46/48 pass — 2 lỗi (làm tròn tiền, ngày âm)'}, {pass: true, text: '48/48 pass'}, {pass: true, text: '50/50 pass'}],
+    reviews: [{ok: false, text: 'changes_requested — 2 góp ý minor'}, {ok: true, text: 'approve'}]});
+  t.pin = '💬 Đang phỏng vấn';
+  post(null, 'bot', `🆕 Đã tạo topic <b>#${t.id} · ${slug}</b> (từ ${channel}).`, {buttons: [{label: 'Mở topic →', fn: () => openTopic(t.id), keep: true}]});
+  post(t, 'me', esc(idea));
+  setTimeout(() => askNext(t), 600 / S.speed);
+  return t;
+}
+function askNext(t) {
+  const q = IVQ[t.iv.step];
+  if (q) { t.chips = q.chips; post(t, 'bot', `❓ ${q.q}`); return; }
+  t.chips = ['/go', 'Thêm: đăng nhập bằng Google'];
+  post(t, 'bot', `📝 Tóm lại tôi hiểu: web app chi tiêu cho <b>${esc(t.iv.answers[0] || '')}</b>, ${esc(t.iv.answers[1] || '')}, màn đầu tiên hiển thị <b>${esc(t.iv.answers[2] || '')}</b>.<br>Còn gì thêm không? Gõ <span class="mono">/go</span> khi bạn thấy đủ.`);
+}
+function ivAnswer(t, text) {
+  post(t, 'me', esc(text));
+  if (t.iv.step < IVQ.length) { t.iv.answers.push(text); t.iv.step++; }
+  else { t.extra.push(text.replace(/^Thêm:\s*/i, '')); t.chips = ['/go']; setTimeout(() => post(t, 'bot', '👍 Đã ghi thêm vào yêu cầu. Gõ /go khi sẵn sàng.'), 500 / S.speed); return; }
+  setTimeout(() => askNext(t), 700 / S.speed);
+}
+async function goSpec(t) {
+  t.chips = [];
+  post(t, 'bot', '⏳ Đang soạn spec.md…');
+  await sleep(1200);
+  const g = await gate(t, 'spec',
+    `📄 <b>Spec #${t.id}</b> (tóm tắt)<br>• Mục tiêu: web app chi tiêu gia đình, mobile-first<br>• Người dùng: ${esc(t.iv.answers[0] || '—')}<br>• Màn chính: ${esc(t.iv.answers[2] || '—')}<br>` +
+    `${t.extra.length ? '• Thêm: ' + t.extra.map(esc).join(', ') + '<br>' : ''}• Repo mới: <span class="mono">chien/${t.project}</span> (private)<br>• Lệnh test: <span class="mono">npm test</span> · Deploy: Vercel`);
+  if (g.decision === 'reject') { t.status = 'cancelled'; t.pin = '✖ Đã huỷ'; post(t, 'bot', '✖ Đã huỷ task.'); return; }
+  if (g.decision === 'comment') { t.status = 'interviewing'; t.extra.push(g.comment); t.chips = ['/go']; post(t, 'bot', `👍 Đã thêm “${esc(g.comment)}”. Gõ /go để soạn lại spec.`); return; }
+  t.status = 'queued'; t.pin = '⏳ Đang xếp hàng';
+  post(t, 'bot', `📦 Đã tạo repo <span class="mono">chien/${t.project}</span>, branch <span class="mono">hub/${t.id}-${t.slug}</span>. Bắt đầu chạy.`);
+  log(t, `[hub] create repo chien/${t.project}; worktree ~/.ntc-hub/work/${t.id}`);
+  await sleep(800);
+  runPipeline(t);
+}
+
+/* ================== TELEGRAM INPUT ================== */
+function openTopic(k) { S.view = 'tg'; S.tgTopic = k; S.unread[k] = 0; render(); }
+function tgSend(text) {
+  text = text.trim(); if (!text) return;
+  const k = S.tgTopic, t = k === 'general' ? null : T(k);
+  if (t && t.awaitingComment) { post(t, 'me', esc(text)); resolveGate(t, 'comment', 'Telegram', text); return; }
+  if (!text.startsWith('/')) {
+    if (t && t.status === 'interviewing') return ivAnswer(t, text);
+    post(t, 'me', esc(text));
+    return post(t, 'bot', t ? 'Đã ghi nhận. (Ngoài lúc phỏng vấn, hãy dùng lệnh như /status, /logs.)' : 'Dùng /new &lt;ý tưởng&gt; để bắt đầu một task mới.');
+  }
+  post(t, 'me', `<span class="mono">${esc(text)}</span>`);
+  const [cmd, ...rest] = text.split(/\s+/); const arg = rest.join(' ');
+  const tt = t || (arg && T(parseInt(arg))) || null;
+  switch (cmd) {
+    case '/new': {
+      if (!arg) return post(t, 'bot', 'Cú pháp: /new &lt;ý tưởng&gt;');
+      const nt = startNew(arg, 'Telegram'); setTimeout(() => openTopic(nt.id), 300); return;
+    }
+    case '/go': if (t && t.status === 'interviewing') return goSpec(t); return post(t, 'bot', 'Chỉ dùng /go khi đang phỏng vấn.');
+    case '/tasks': return post(t, 'bot', S.tasks.map(x => `${icon(x)} <b>#${x.id}</b> ${x.slug} — ${statusVi(x.status)} · ${x.stage}`).join('<br>'));
+    case '/status': if (!tt) return post(t, 'bot', 'Cú pháp: /status &lt;id&gt;');
+      return post(t, 'bot', `${icon(tt)} <b>#${tt.id} ${tt.slug}</b><br>Trạng thái: ${statusVi(tt.status)}<br>Chặng: ${tt.stage}<br>${esc(tt.pin)}`);
+    case '/logs': if (!tt) return post(t, 'bot', 'Cú pháp: /logs &lt;id&gt;');
+      return post(t, 'bot', `<pre class="mono text-xs whitespace-pre-wrap">${tt.logs.slice(-8).map(l => esc(l.time + ' ' + l.text)).join('\n') || '(chưa có log)'}</pre>`);
+    case '/approve': if (tt && resolveGate(tt, 'approve', 'Telegram')) return; return post(t, 'bot', 'Không có gì đang chờ duyệt.');
+    case '/merge': if (tt) return doMerge(tt, 'Telegram'); return;
+    case '/preview': if (tt) return doPreview(tt); return;
+    case '/deploy': if (tt) return doDeploy(tt, /staging/.test(arg) ? 'staging' : 'prod'); return post(t, 'bot', 'Dùng trong topic của task.');
+    case '/auto': if (!t) return; t.auto = !/off/.test(arg); return post(t, 'bot', t.auto ? '⚡ Task này chạy thẳng, bỏ qua các điểm duyệt (trừ deploy prod).' : '⏸ Task này dùng điểm duyệt mặc định.');
+    case '/cancel': if (!tt) return; tt.status = 'cancelled'; if (tt.pending) resolveGate(tt, 'reject', 'Telegram'); return post(t, 'bot', `Đang huỷ #${tt.id}…`);
+    case '/agents': return post(t, 'bot', Object.entries(S.harness).map(([h, v]) => `${v.auth === 'ok' ? '🟢' : '🔴'} <b>${h}</b> — ${v.auth === 'ok' ? 'đăng nhập OK' : 'HẾT HẠN'} · ${v.quota == null ? 'API key' : 'quota còn ~' + v.quota + '%'} · ${running(h)}/${v.limit} đang chạy`).join('<br>'));
+    case '/login': {
+      const h = arg || 'codex';
+      if (!S.harness[h]) return post(t, 'bot', 'Harness không tồn tại.');
+      return post(t, 'bot', `🔐 Đăng nhập <b>${h}</b>: mở <u>https://auth.example.com/device</u> và nhập mã <b class="mono">QK7F-29XD</b>`, {buttons: [{label: '(demo) Tôi đã đăng nhập xong', fn: () => { S.harness[h].auth = 'ok'; S.harness[h].quota = 100; post(t, 'bot', `🟢 ${h} đã đăng nhập.`); }}]});
+    }
+    case '/route': return post(t, 'bot', ROLES.map(([k, l]) => `${l}: <span class="mono">${S.routes[k].h} · ${S.routes[k].m}</span>`).join('<br>') + '<br><span class="text-xs opacity-80">Đổi: /route code antigravity claude-sonnet-5.5</span>');
+    case '/gates': return post(t, 'bot', Object.entries(S.gates).map(([g, v]) => `${v ? '🟢' : '⚪'} ${GATE_LABEL[g]}`).join('<br>'));
+    case '/help': return post(t, 'bot', '<b>Tạo việc</b>: /new · /task · /fix · /go<br><b>Theo dõi</b>: /tasks · /status · /logs · /report<br><b>Điều khiển</b>: /approve · /reject · /auto · /pause · /resume · /cancel<br><b>Preview/Deploy</b>: /preview · /merge · /deploy · /rollback · /down<br><b>Setup</b>: /setup · /github · /login · /apikey · /route · /prompt · /gates · /limits · /config<br><b>Hệ thống</b>: /projects · /agents');
+    default: return post(t, 'bot', `(demo) Lệnh <span class="mono">${esc(cmd)}</span> chưa được giả lập trong prototype.`);
+  }
+}
+function tgChips() {
+  const k = S.tgTopic;
+  if (k === 'general') return ['/new Tôi muốn làm app quản lý chi tiêu gia đình', '/tasks', '/agents', '/login codex', '/route', '/help'];
+  const t = T(k);
+  if (t.awaitingComment) return ['Thêm tính năng xuất Excel', 'Dùng PostgreSQL thay SQLite'];
+  if (t.status === 'interviewing') return t.chips;
+  const c = ['/status', '/logs'];
+  if (t.status === 'awaiting_merge') c.push('/preview', '/merge');
+  if (t.status === 'done') c.push('/deploy prod', '/preview');
+  if (['running', 'queued', 'waiting_approval'].includes(t.status)) c.push(t.auto ? '/auto off' : '/auto on', '/cancel');
+  return c;
+}
+
+/* ================== CLI ================== */
+function cliPrint(html) {
+  S.cli.lines.push(html);
+  const out = document.getElementById('cli-out');
+  if (out && S.view === 'cli') { out.insertAdjacentHTML('beforeend', html + '\n'); out.scrollTop = out.scrollHeight; }
+}
+function pad(s, n) { s = String(s); return s.length >= n ? s.slice(0, n - 1) + ' ' : s + ' '.repeat(n - s.length); }
+function cliRun(line) {
+  line = line.trim(); if (!line) return;
+  if (S.cli.follow) { cliPrint('<span class="dim">^C (ngừng theo dõi log)</span>'); S.cli.follow = null; }
+  cliPrint(`<span class="ok">ntchub@vps:~$</span> <span class="cmd">${esc(line)}</span>`);
+  const p = line.match(/"[^"]*"|\S+/g) || [];
+  if (p[0] !== 'hub') { cliPrint('<span class="err">lệnh không tìm thấy — thử: hub help</span>'); return renderCliFollow(); }
+  const sub = p[1], args = p.slice(2);
+  const last = S.tasks.filter(t => !['done', 'cancelled'].includes(t.status)).slice(-1)[0];
+  const tid = args.find(a => /^\d+$/.test(a)) || (last && last.id);
+  const t = T(tid);
+  switch (sub) {
+    case 'help': case undefined:
+      cliPrint('hub new "<ý tưởng>"   tạo task app mới (phỏng vấn tiếp trong terminal hoặc Telegram)\nhub task <project> "<yêu cầu>" · hub fix <project> "<bug>"\nhub tasks             danh sách task\nhub status <id>       trạng thái\nhub logs [-f] <id>    xem / theo dõi log\nhub approve <id>      duyệt điểm đang chờ\nhub merge <id> · hub deploy <id> prod\nhub agents · hub route · hub gates · hub doctor'); break;
+    case 'tasks':
+      cliPrint('<span class="dim">' + pad('ID', 5) + pad('PROJECT', 16) + pad('KIND', 6) + pad('STATUS', 18) + 'STAGE</span>');
+      S.tasks.forEach(x => cliPrint(pad('#' + x.id, 5) + pad(x.project, 16) + pad(x.kind, 6) + `<span class="${x.status === 'waiting_approval' ? 'warn' : x.status === 'done' ? 'ok' : x.status === 'failed' ? 'err' : ''}">` + pad(x.status, 18) + '</span>' + esc(x.stage)));
+      break;
+    case 'status':
+      if (!t) { cliPrint('<span class="err">không tìm thấy task</span>'); break; }
+      cliPrint(`#${t.id} ${t.slug}  [${t.status}]\n${esc(t.pin)}\n` + t.timeline.map(i => `  ${i.state === 'done' ? '<span class="ok">✓</span>' : i.state === 'failed' ? '<span class="err">✗</span>' : '<span class="warn">…</span>'} ${pad(i.label, 18)}<span class="dim">${esc(i.agent)}</span> ${esc(i.note || '')}`).join('\n'));
+      break;
+    case 'logs':
+      if (!t) { cliPrint('<span class="err">không tìm thấy task</span>'); break; }
+      t.logs.slice(-10).forEach(l => cliPrint(`<span class="dim">${l.time}</span> ${esc(l.text)}`));
+      if (args.includes('-f')) { S.cli.follow = t.id; cliPrint(`<span class="dim">— đang theo dõi #${t.id}, gõ lệnh khác để dừng —</span>`); }
+      break;
+    case 'approve':
+      const gname = t && t.pending ? GATE_LABEL[t.pending.name] : '';
+      if (t && resolveGate(t, 'approve', 'CLI')) cliPrint(`<span class="ok">✓ đã duyệt "${gname}" cho #${t.id}</span>`);
+      else cliPrint('<span class="warn">không có điểm duyệt nào đang chờ</span>');
+      break;
+    case 'merge': if (t) { doMerge(t, 'CLI'); cliPrint('xem kết quả trong topic Telegram / Webapp'); } break;
+    case 'deploy': if (t) { doDeploy(t, args.includes('staging') ? 'staging' : 'prod'); cliPrint('<span class="warn">đã gửi yêu cầu deploy — chờ duyệt</span>'); } break;
+    case 'new': {
+      const idea = (args.join(' ') || '"app mới"').replace(/"/g, '');
+      const nt = startNew(idea, 'CLI');
+      cliPrint(`<span class="ok">✓ tạo task #${nt.id}</span> — phỏng vấn đang diễn ra trong topic Telegram #${nt.id}\n<span class="dim">(bản thật: phỏng vấn tương tác ngay trong terminal, đồng bộ với Telegram)</span>`);
+      break;
+    }
+    case 'agents':
+      Object.entries(S.harness).forEach(([h, v]) => cliPrint(`${v.auth === 'ok' ? '<span class="ok">●</span>' : '<span class="err">●</span>'} ${pad(h, 13)}${pad(v.auth === 'ok' ? 'auth ok' : 'EXPIRED', 10)}${pad(v.quota == null ? 'api-key' : 'quota ~' + v.quota + '%', 13)}${running(h)}/${v.limit} running  <span class="dim">${v.via}</span>`));
+      break;
+    case 'route':
+      ROLES.forEach(([k, l]) => cliPrint(`${pad(k, 11)}${pad(S.routes[k].h, 13)}${S.routes[k].m}`)); break;
+    case 'gates':
+      Object.entries(S.gates).forEach(([g, v]) => cliPrint(`${pad(g, 16)}${v ? '<span class="ok">on</span>' : '<span class="dim">off</span>'}`)); break;
+    case 'doctor':
+      cliPrint('<span class="ok">✓</span> hubd đang chạy (systemd)\n<span class="ok">✓</span> GitHub App: chien (repo: create, PR)\n<span class="ok">✓</span> Telegram bot: admin + Manage Topics\n' + Object.entries(S.harness).map(([h, v]) => (v.auth === 'ok' ? '<span class="ok">✓</span> ' : '<span class="err">✗</span> ') + h + (v.auth === 'ok' ? '' : ' — chạy: hub login ' + h)).join('\n') + '\n<span class="ok">✓</span> Docker + image ntchub-agent\n<span class="ok">✓</span> Disk: 182 GB trống'); break;
+    default: cliPrint(`<span class="dim">(demo) "hub ${esc(sub)}" chưa được giả lập</span>`);
+  }
+  renderCliFollow();
+}
+function renderCliFollow() { document.getElementById('cli-follow').textContent = S.cli.follow ? `following #${S.cli.follow} ●` : ''; }
+
+/* ================== RENDER ================== */
+function icon(t) { return {interviewing: '💬', queued: '⏳', running: '⚙️', waiting_approval: '⏸', awaiting_merge: '🔀', done: '✅', failed: '⛔', cancelled: '✖'}[t.status] || '•'; }
+function statusVi(s) { return {interviewing: 'đang phỏng vấn', queued: 'xếp hàng', running: 'đang chạy', waiting_approval: 'CHỜ DUYỆT', awaiting_merge: 'xong, chờ merge', done: 'hoàn tất', failed: 'lỗi', cancelled: 'đã huỷ'}[s] || s; }
+function running(h) { return S.tasks.filter(t => t.status === 'running' && (t.timeline.slice(-1)[0] || {}).agent?.startsWith(h)).length; }
+
+function render() {
+  // tabs
+  const pending = S.tasks.filter(t => t.status === 'waiting_approval').length;
+  const unread = Object.values(S.unread).reduce((a, b) => a + b, 0);
+  document.getElementById('tabs').innerHTML = [['tg', '📱 Telegram', unread], ['cli', '⌨️ hub CLI', 0], ['web', '🖥 Webapp', pending]].map(([k, l, n]) =>
+    `<button onclick="S.view='${k}';render()" class="px-3 py-1 rounded-md ${S.view === k ? 'tab-active' : ''}">${l}${n ? ` <span class="ml-1 text-xs rounded-full px-1.5 bg-red-500 text-white">${n}</span>` : ''}</button>`).join('');
+  ['tg', 'cli', 'web'].forEach(v => document.getElementById('v-' + v).classList.toggle('hidden', S.view !== v));
+  if (S.view === 'tg') renderTG(); else if (S.view === 'cli') renderCLI(); else renderWeb();
+}
+function renderTG() {
+  S.unread[S.tgTopic] = 0;
+  const topics = [{k: 'general', name: '# General', sub: 'Lệnh hệ thống'}].concat(S.tasks.map(t => ({k: t.id, name: `${icon(t)} #${t.id} · ${t.slug}`, sub: statusVi(t.status) + ' · ' + t.stage})));
+  document.getElementById('tg-topics').innerHTML = topics.map(o => `
+    <div onclick="openTopic(${o.k === 'general' ? "'general'" : o.k})" class="px-3 py-2.5 cursor-pointer border-b border-[var(--border)] ${S.tgTopic == o.k ? 'bg-[var(--accent)]' : ''}">
+      <div class="flex justify-between gap-2"><span class="text-sm font-medium truncate">${o.name}</span>${S.unread[o.k] ? `<span class="text-xs rounded-full px-1.5 bg-[var(--primary)] text-[var(--primary-foreground)]">${S.unread[o.k]}</span>` : ''}</div>
+      <div class="text-xs text-[var(--muted-foreground)] truncate">${o.sub}</div>
+    </div>`).join('');
+  const t = S.tgTopic === 'general' ? null : T(S.tgTopic);
+  document.getElementById('tg-head').innerHTML = t
+    ? `<div class="font-semibold text-sm">#${t.id} · ${t.slug}</div><div class="text-xs text-[var(--muted-foreground)]">${t.kind} · ${t.project} · ${statusVi(t.status)}${t.auto ? ' · ⚡ chạy thẳng' : ''}</div>`
+    : `<div class="font-semibold text-sm"># General</div><div class="text-xs text-[var(--muted-foreground)]">Tạo task mới, xem tổng quan, setup</div>`;
+  document.getElementById('tg-pin').innerHTML = t && t.pin ? `<div class="px-4 py-1.5 text-xs border-b border-[var(--border)] bg-[var(--secondary)] text-[var(--secondary-foreground)] flex gap-2"><span>${esc(t.pin)}</span>${t.status === 'running' ? '<span class="pulse">●</span>' : ''}</div>` : '';
+  const msgs = t ? t.msgs : S.general;
+  const box = document.getElementById('tg-msgs');
+  box.innerHTML = msgs.map(m => `
+    <div class="flex ${m.from === 'me' ? 'justify-end' : 'justify-start'}">
+      <div class="bubble max-w-[78%] rounded-2xl px-3 py-2 text-sm ${m.from === 'me' ? 'bg-[var(--primary)] text-[var(--primary-foreground)] rounded-br-sm' : 'bg-[var(--card)] border border-[var(--border)] rounded-bl-sm'}">
+        <div>${m.html}</div>
+        ${m.buttons ? `<div class="mt-2 flex flex-wrap gap-1.5">${m.done ? `<span class="text-xs opacity-80">${m.done}</span>` : m.buttons.map((b, i) => `<button onclick="clickBtn(${m.id},${i})" class="text-xs rounded-md px-2.5 py-1 border border-[var(--border)] bg-[var(--background)] hover:bg-[var(--accent)]">${b.label}</button>`).join('')}</div>` : ''}
+        <div class="text-[12px] opacity-60 text-right mt-0.5">${m.time}</div>
+      </div>
+    </div>`).join('');
+  box.scrollTop = box.scrollHeight;
+  document.getElementById('tg-chips').innerHTML = tgChips().map(c => `<button onclick='tgSend(${JSON.stringify(c)})' class="text-xs rounded-full px-3 py-1 border border-[var(--border)] bg-[var(--background)] hover:bg-[var(--accent)]">${esc(c)}</button>`).join('');
+}
+function clickBtn(mid, i) {
+  const m = findMsg(mid); if (!m || m.done) return;
+  const b = m.buttons[i];
+  if (!b.keep) m.done = b.label;
+  b.fn(); render();
+}
+function renderCLI() {
+  const out = document.getElementById('cli-out');
+  out.innerHTML = S.cli.lines.join('\n') + '\n';
+  out.scrollTop = out.scrollHeight;
+  const ids = S.tasks.map(t => t.id);
+  const cur = (S.tasks.find(t => t.status === 'waiting_approval') || S.tasks.slice(-1)[0] || {}).id || 9;
+  document.getElementById('cli-chips').innerHTML = ['hub tasks', `hub status ${cur}`, `hub logs -f ${cur}`, `hub approve ${cur}`, 'hub agents', 'hub route', 'hub doctor', 'hub help']
+    .map(c => `<button onclick='cliRun(${JSON.stringify(c)})' class="mono text-xs rounded px-2 py-0.5 border border-[#30363d] hover:bg-[#161b22]">${c}</button>`).join('');
+  renderCliFollow();
+}
+
+/* ---------- Webapp ---------- */
+function renderWeb() {
+  const pages = [['dash', '📊 Dashboard'], ['task', '🧩 Chi tiết task'], ['routing', '🔀 Phân việc & model'], ['prompts', '📝 Prompt nạp sẵn'], ['gates', '⏸ Điểm duyệt & giới hạn'], ['harness', '🔐 Harness & API key']];
+  document.getElementById('web-nav').innerHTML = `<div class="text-sm font-semibold px-2 pb-2">ntc-ai-center-hub</div>` + pages.map(([k, l]) =>
+    `<button onclick="S.webPage='${k}';render()" class="w-full text-left text-sm px-2 py-1.5 rounded-md ${S.webPage === k ? 'tab-active' : 'hover:bg-[var(--accent)]'}">${l}</button>`).join('');
+  const el = document.getElementById('web-main');
+  const keepScroll = el.scrollTop;
+  el.innerHTML = ({dash: webDash, task: webTask, routing: webRouting, prompts: webPrompts, gates: webGates, harness: webHarness})[S.webPage]();
+  el.scrollTop = keepScroll;
+}
+const card = (inner, cls = '') => `<div class="rounded-xl border border-[var(--border)] bg-[var(--card)] p-4 ${cls}">${inner}</div>`;
+function webDash() {
+  const waits = S.tasks.filter(t => t.status === 'waiting_approval');
+  const cols = [['Đang phỏng vấn', ['interviewing']], ['Đang chạy / xếp hàng', ['running', 'queued']], ['Chờ duyệt', ['waiting_approval']], ['Chờ merge', ['awaiting_merge']], ['Xong / dừng', ['done', 'failed', 'cancelled']]];
+  return `<h2 class="text-lg font-semibold mb-3">Dashboard</h2>
+  ${waits.length ? card(`<div class="font-semibold text-sm mb-2">⏸ Cần bạn duyệt (${waits.length})</div>` + waits.map(t => `
+    <div class="flex items-center gap-3 py-2 border-t border-[var(--border)] first:border-0">
+      <div class="flex-1 text-sm"><b>#${t.id} ${t.slug}</b> — ${GATE_LABEL[t.pending.name]}</div>
+      <button onclick="resolveGate(T(${t.id}),'approve','Webapp')" class="text-xs rounded-md px-3 py-1 bg-[var(--primary)] text-[var(--primary-foreground)]">Duyệt</button>
+      <button onclick="S.webPage='task';S.webTask=${t.id};render()" class="text-xs rounded-md px-3 py-1 border border-[var(--border)]">Xem</button>
+    </div>`).join(''), 'mb-4') : ''}
+  <div class="grid grid-cols-5 gap-3">${cols.map(([name, st]) => `
+    <div><div class="text-xs font-semibold text-[var(--muted-foreground)] mb-2">${name}</div>
+    <div class="space-y-2">${S.tasks.filter(t => st.includes(t.status)).map(t => `
+      <div onclick="S.webPage='task';S.webTask=${t.id};render()" class="cursor-pointer rounded-lg border border-[var(--border)] bg-[var(--card)] p-2.5 hover:bg-[var(--accent)]">
+        <div class="text-sm font-medium">${icon(t)} #${t.id} ${t.slug}</div>
+        <div class="text-xs text-[var(--muted-foreground)] mt-0.5">${t.kind} · ${esc(t.stage)}</div>
+      </div>`).join('') || '<div class="text-xs text-[var(--muted-foreground)]">—</div>'}</div></div>`).join('')}</div>
+  <div class="grid grid-cols-4 gap-3 mt-5">${Object.entries(S.harness).map(([h, v]) => card(`<div class="text-xs text-[var(--muted-foreground)]">${h}</div><div class="text-sm font-semibold">${v.auth === 'ok' ? '🟢 OK' : '🔴 Hết hạn'}</div><div class="text-xs mt-1">${running(h)}/${v.limit} đang chạy</div>`)).join('')}</div>`;
+}
+function webTask() {
+  const t = T(S.webTask) || S.tasks[0];
+  const sel = `<select onchange="S.webTask=+this.value;render()" class="text-sm rounded-md border border-[var(--border)] bg-[var(--card)] px-2 py-1">${S.tasks.map(x => `<option value="${x.id}" ${x.id === t.id ? 'selected' : ''}>#${x.id} ${x.slug}</option>`).join('')}</select>`;
+  const arts = ['spec.md'].concat(t.timeline.some(i => i.label.startsWith('Lên plan')) ? ['plan.md'] : []).concat(t.timeline.some(i => i.label.startsWith('Test')) ? ['test-report.md'] : []).concat(t.timeline.some(i => i.label.startsWith('Review')) ? ['review.json'] : []).concat(t.pr ? ['REPORT.md'] : []);
+  return `<div class="flex items-center gap-3 mb-3"><h2 class="text-lg font-semibold">Chi tiết task</h2>${sel}<span class="text-sm text-[var(--muted-foreground)]">${statusVi(t.status)}</span></div>
+  ${t.pending ? card(`<div class="flex items-center gap-3"><div class="flex-1 text-sm">⏸ Đang chờ: <b>${GATE_LABEL[t.pending.name]}</b> <span class="text-[var(--muted-foreground)]">(cùng tin nhắn đang chờ trong Telegram topic #${t.id})</span></div>
+    <button onclick="resolveGate(T(${t.id}),'approve','Webapp')" class="text-xs rounded-md px-3 py-1 bg-[var(--primary)] text-[var(--primary-foreground)]">Duyệt</button>
+    <button onclick="resolveGate(T(${t.id}),'reject','Webapp')" class="text-xs rounded-md px-3 py-1 border border-[var(--border)]">Từ chối</button></div>`, 'mb-4 border-[var(--primary)]') : ''}
+  <div class="grid grid-cols-[1fr_1fr] gap-4">
+    ${card(`<div class="font-semibold text-sm mb-2">Timeline</div>` + (t.timeline.length ? t.timeline.map(i => `
+      <div class="flex gap-2 py-1.5 text-sm"><span>${i.state === 'done' ? '✅' : i.state === 'failed' ? '❌' : '<span class="pulse">🟡</span>'}</span>
+      <div class="flex-1"><div>${esc(i.label)} <span class="text-xs text-[var(--muted-foreground)] mono">${esc(i.agent)}</span></div>${i.note ? `<div class="text-xs text-[var(--muted-foreground)]">${esc(i.note)}</div>` : ''}</div></div>`).join('') : '<div class="text-sm text-[var(--muted-foreground)]">Chưa bắt đầu (đang phỏng vấn)</div>'))}
+    <div class="space-y-4">
+      ${card(`<div class="font-semibold text-sm mb-2">Artifact</div><div class="flex flex-wrap gap-2">${arts.map(a => `<span class="mono text-xs rounded px-2 py-1 border border-[var(--border)]">📄 ${a}</span>`).join('')}</div>
+        <div class="text-xs text-[var(--muted-foreground)] mt-2">Branch: <span class="mono">hub/${t.id}-${t.slug}</span>${t.pr ? ` · PR: <u>${t.pr}</u>` : ''}</div>`)}
+      ${card(`<div class="font-semibold text-sm mb-2">Hành động</div><div class="flex flex-wrap gap-2">
+        <button onclick="doPreview(T(${t.id}))" class="text-xs rounded-md px-3 py-1 border border-[var(--border)]">🔗 Preview</button>
+        <button onclick="doMerge(T(${t.id}),'Webapp')" class="text-xs rounded-md px-3 py-1 border border-[var(--border)]">🔀 Merge</button>
+        <button onclick="doDeploy(T(${t.id}),'prod')" class="text-xs rounded-md px-3 py-1 border border-[var(--border)]">🚀 Deploy prod</button>
+        <button onclick="openTopic(${t.id})" class="text-xs rounded-md px-3 py-1 border border-[var(--border)]">📱 Mở topic</button></div>`)}
+      ${card(`<div class="font-semibold text-sm mb-2">Log trực tiếp</div><pre class="mono text-xs whitespace-pre-wrap max-h-[220px] overflow-y-auto">${t.logs.slice(-14).map(l => esc(l.time + ' ' + l.text)).join('\n') || '(chưa có)'}</pre>`)}
+      ${card(`<div class="font-semibold text-sm mb-1">Quota đã dùng</div><div class="text-xs">${usageLine(t)}</div>`)}
+    </div>
+  </div>`;
+}
+function setRoute(role, field, val) {
+  S.routes[role][field] = val;
+  if (field === 'h') S.routes[role].m = MODELS[val][0];
+  render();
+}
+function webRouting() {
+  return `<div class="flex items-center gap-3 mb-1"><h2 class="text-lg font-semibold">Phân việc & model</h2>
+    <button onclick="S.routes=JSON.parse(JSON.stringify(PRESET_MULTI));render()" class="ml-auto text-xs rounded-md px-3 py-1 border border-[var(--border)]">Mẫu: đa harness</button>
+    <button onclick="S.routes=JSON.parse(JSON.stringify(PRESET_AG));render()" class="text-xs rounded-md px-3 py-1 bg-[var(--primary)] text-[var(--primary-foreground)]">Mẫu: chỉ Antigravity</button></div>
+  <p class="text-sm text-[var(--muted-foreground)] mb-3">Mỗi vai = một cặp (harness, model). Một harness có thể đảm nhận mọi vai với model khác nhau. API key chỉ cắm vào <b>deepseek</b>. Đổi ở đây sẽ áp dụng ngay cho các chặng tiếp theo (thử đổi rồi xem Telegram).</p>
+  ${card(`<table class="w-full text-sm"><thead><tr class="text-left text-xs text-[var(--muted-foreground)]"><th class="pb-2">Vai</th><th>Harness</th><th>Model</th><th>Dự phòng</th></tr></thead><tbody>
+  ${ROLES.map(([k, l]) => `<tr class="border-t border-[var(--border)]"><td class="py-2 font-medium">${l}</td>
+    <td><select onchange="setRoute('${k}','h',this.value)" class="rounded-md border border-[var(--border)] bg-[var(--background)] px-2 py-1 text-sm">${Object.keys(MODELS).map(h => `<option ${S.routes[k].h === h ? 'selected' : ''}>${h}</option>`).join('')}</select>
+      ${S.harness[S.routes[k].h].auth !== 'ok' ? '<span class="text-xs text-red-500 ml-1">● hết hạn</span>' : ''}</td>
+    <td><select onchange="setRoute('${k}','m',this.value)" class="rounded-md border border-[var(--border)] bg-[var(--background)] px-2 py-1 text-sm mono">${MODELS[S.routes[k].h].map(m => `<option ${S.routes[k].m === m ? 'selected' : ''}>${m}</option>`).join('')}</select></td>
+    <td class="text-xs text-[var(--muted-foreground)] mono">claude-code·sonnet → deepseek·v4</td></tr>`).join('')}
+  </tbody></table>`)}
+  <p class="text-xs text-[var(--muted-foreground)] mt-2">Tên model là ví dụ minh hoạ; bản thật lấy danh sách model từ từng harness.</p>`;
+}
+function webPrompts() {
+  return `<h2 class="text-lg font-semibold mb-3">Prompt nạp sẵn</h2>
+  <div class="grid grid-cols-[180px_1fr] gap-4">
+    ${card(ROLES.map(([k, l], i) => `<div class="text-sm px-2 py-1.5 rounded-md ${i === 4 ? 'tab-active' : ''}">${l}</div>`).join(''))}
+    ${card(`<div class="flex items-center gap-2 mb-2"><div class="font-semibold text-sm">Review</div><span class="text-xs text-[var(--muted-foreground)]">v3 · sửa 2 ngày trước</span><button class="ml-auto text-xs rounded-md px-2 py-1 border border-[var(--border)]">Lịch sử</button><button class="text-xs rounded-md px-2 py-1 bg-[var(--primary)] text-[var(--primary-foreground)]">Lưu v4</button></div>
+<textarea class="w-full h-[360px] mono text-xs rounded-md border border-[var(--border)] bg-[var(--background)] p-3">Bạn là reviewer khó tính cho dự án {{project.name}}.
+
+Đầu vào:
+- Spec: {{spec}}
+- Plan: {{plan}}
+- Diff so với {{project.default_branch}}: chạy "git diff origin/{{project.default_branch}}...HEAD"
+- Kết quả test do hub chạy: {{test_report}}
+
+Kiểm tra theo thứ tự:
+1. Code có đáp ứng tiêu chí chấp nhận trong spec không
+2. Bảo mật: secret, injection, phân quyền
+3. Xử lý lỗi và edge case
+4. Test có thực chất không (không mock bừa, không test rỗng)
+
+KHÔNG sửa code. Ghi kết quả vào review.json:
+{"verdict": "approve|changes_requested",
+ "issues": [{"severity": "blocker|major|minor", "file": "", "line": 0, "note": ""}]}
+
+Chỉ "changes_requested" khi có blocker/major hoặc ≥3 minor.</textarea>
+    <div class="text-xs text-[var(--muted-foreground)] mt-1">Biến khả dụng: {{spec}} {{plan}} {{repo_summary}} {{test_report}} {{review}} {{round}} {{project.*}} {{task.*}}</div>`)}
+  </div>`;
+}
+function webGates() {
+  const g = (k, desc, locked) => `<label class="flex items-center gap-3 py-2.5 border-t border-[var(--border)] first:border-0">
+    <input type="checkbox" ${S.gates[k] ? 'checked' : ''} ${locked ? 'disabled' : ''} onchange="S.gates['${k}']=this.checked;render()" class="w-4 h-4">
+    <div class="flex-1"><div class="text-sm font-medium">${GATE_LABEL[k]}${locked ? ' 🔒' : ''}</div><div class="text-xs text-[var(--muted-foreground)]">${desc}</div></div></label>`;
+  return `<h2 class="text-lg font-semibold mb-3">Điểm duyệt & giới hạn</h2>
+  <div class="grid grid-cols-2 gap-4">
+  ${card(`<div class="font-semibold text-sm mb-1">Điểm duyệt mặc định</div><div class="text-xs text-[var(--muted-foreground)] mb-2">Bật = hub dừng lại và hỏi bạn qua Telegram (duyệt được ở mọi cửa). Ghi đè từng task: <span class="mono">/auto on|off</span>.</div>
+    ${g('spec', 'Sau khi /go, duyệt bản spec trước khi bắt đầu')}
+    ${g('plan', 'Duyệt plan trước khi code')}
+    ${g('merge', 'Tắt = tự merge khi test pass + review approve + có test')}
+    ${g('deploy_staging', 'Deploy luôn bắt đầu bằng lệnh /deploy')}
+    ${g('deploy_prod', 'Luôn bật ở cấu hình chung (chỉ tắt riêng từng project)', true)}`)}
+  ${card(`<div class="font-semibold text-sm mb-2">Giới hạn</div>
+    <div class="text-sm space-y-2">
+      <div class="flex justify-between"><span>Số vòng fix tối đa</span><input type="number" value="${S.maxRounds}" min="1" max="9" onchange="S.maxRounds=+this.value" class="w-16 rounded-md border border-[var(--border)] bg-[var(--background)] px-2"></div>
+      <div class="flex justify-between"><span>Task chạy đồng thời (toàn hệ thống)</span><span class="mono">4</span></div>
+      ${Object.entries(S.harness).map(([h, v]) => `<div class="flex justify-between"><span>${h} — đồng thời</span><span class="mono">${v.limit}</span></div>`).join('')}
+      <div class="flex justify-between"><span>antigravity · claude-opus-5.5 — đồng thời</span><span class="mono">1</span></div>
+      <div class="flex justify-between"><span>Khi hết quota</span><span>chờ hồi quota → dự phòng</span></div>
+      <div class="flex justify-between"><span>Preview tự tắt sau</span><span class="mono">24h</span></div>
+    </div>`)}
+  </div>`;
+}
+function webHarness() {
+  return `<h2 class="text-lg font-semibold mb-3">Harness & API key</h2>
+  <div class="grid grid-cols-2 gap-4">${Object.entries(S.harness).map(([h, v]) => card(`
+    <div class="flex items-center gap-2"><div class="font-semibold">${h}</div><span class="text-xs ml-auto ${v.auth === 'ok' ? 'text-green-600' : 'text-red-500'}">● ${v.auth === 'ok' ? 'Đăng nhập OK' : 'Hết hạn'}</span></div>
+    <div class="text-xs text-[var(--muted-foreground)] mt-1">${v.via} · gọi qua CLI chính chủ, chạy trong container riêng</div>
+    ${v.quota != null ? `<div class="mt-3 text-xs flex justify-between"><span>Quota còn (ước tính)</span><span>${v.quota}%</span></div><div class="h-2 rounded bg-[var(--secondary)] mt-1"><div class="h-2 rounded bg-[var(--primary)]" style="width:${v.quota}%"></div></div>` : `<div class="mt-3 text-xs">Key: <span class="mono">sk-••••••••3f9a</span> · tính theo token</div>`}
+    <div class="text-xs mt-2">Model: <span class="mono">${MODELS[h].join(', ')}</span></div>
+    <div class="mt-3 flex gap-2">${v.auth !== 'ok' ? `<button onclick="S.harness['${h}'].auth='ok';S.harness['${h}'].quota=100;render()" class="text-xs rounded-md px-3 py-1 bg-[var(--primary)] text-[var(--primary-foreground)]">Đăng nhập lại (OAuth)</button>` : `<button class="text-xs rounded-md px-3 py-1 border border-[var(--border)]">Kiểm tra</button>`}
+    <button class="text-xs rounded-md px-3 py-1 border border-[var(--border)]">Làm mới danh sách model</button></div>`)).join('')}</div>
+  ${card(`<div class="font-semibold text-sm mb-1">GitHub</div><div class="text-sm">🟢 GitHub App <b>ntc-hub</b> cài trên tài khoản <b>chien</b> · quyền: tạo repo, contents, pull requests</div><div class="text-xs text-[var(--muted-foreground)] mt-1">Chỉ hub giữ token. Agent không có quyền push. Hub chỉ push branch hub/* và merge qua PR.</div>`, 'mt-4')}`;
+}
+
+/* ================== SEED DATA ================== */
+function seed() {
+  post(null, 'bot', '👋 Chào chien! Hub đang chạy trên <b>my-vps</b>. Gõ /help để xem lệnh, hoặc /new để bắt đầu.');
+  // #7 awaiting merge
+  const t7 = newTask({id: 7, kind: 'task', project: 'blog-engine', slug: 'rss-feed', status: 'awaiting_merge', stage: 'Báo cáo', pin: '🔀 Xong — chờ bạn merge (không giữ slot chạy)', pr: 'github.com/chien/blog-engine/pull/23'});
+  t7.timeline = [['Lên plan', 'claude-code · claude-opus-5.5'], ['Code', 'codex · gpt-5.5-codex'], ['Test', 'antigravity · gemini-3.8-flash', '22/22 pass'], ['Review', 'antigravity · gemini-4.0-argon', 'approve'], ['Báo cáo', 'deepseek · deepseek-v4-lite']].map(([label, agent, note]) => ({label, agent, note: note || '', state: 'done'}));
+  t7.usage = {'claude-opus-5.5': 4, 'gpt-5.5-codex': 14, 'gemini-3.8-flash': 6, 'gemini-4.0-argon': 3};
+  t7.msgs.push({id: ++S.mid, from: 'me', html: '/task blog-engine thêm RSS feed', time: '09:12'});
+  t7.msgs.push({id: ++S.mid, from: 'bot', time: '10:40', html: `✅ <b>#7 rss-feed — HOÀN THÀNH</b> (1h28m)<br>PR: <u>${t7.pr}</u><br>Đã làm: /feed.xml, cache 10 phút, link trong header<br>Test: 22/22 pass · Review: approve<br>⚠ Cần bạn xem: không có<br><span class="text-xs opacity-80">Quota: ${usageLine(t7)}</span>`,
+    buttons: [{label: '🔗 Preview', fn: () => doPreview(t7), keep: true}, {label: '🔀 Merge', fn: () => doMerge(t7, 'Telegram'), keep: true}]});
+  t7.logs.push({time: '10:40', text: '[hub] report sent'});
+  // #9 fix, running in background
+  const t9 = newTask({id: 9, kind: 'fix', project: 'shop-api', slug: 'fix-checkout-500', status: 'queued', stage: 'Xếp hàng', tests: [{pass: true, text: '31/31 pass'}], reviews: [{ok: true, text: 'approve'}]});
+  t9.timeline.push({label: 'Spec', state: 'done', agent: 'antigravity · gemini-3.8-flash', note: 'đã duyệt'});
+  t9.msgs.push({id: ++S.mid, from: 'me', html: '/fix shop-api lỗi 500 khi checkout giỏ rỗng', time: now()});
+  t9.msgs.push({id: ++S.mid, from: 'bot', html: '❓ Lỗi xảy ra ở web hay mobile app? Có log/stacktrace không?', time: now()});
+  t9.msgs.push({id: ++S.mid, from: 'me', html: 'Cả hai. Log: TypeError: cannot read total of undefined', time: now()});
+  t9.msgs.push({id: ++S.mid, from: 'bot', html: '📄 Spec #9: checkout giỏ rỗng phải trả 400 + thông báo, không 500. Lệnh test: <span class="mono">pytest -q</span>', time: now(), done: '✅ Đã duyệt', buttons: [{label: '✅ Duyệt', fn() {}}]});
+  t9.pin = '⏳ Đang xếp hàng';
+  S.nextId = 12;
+  S.cli.lines.push('<span class="dim">Welcome to ntc-ai-center-hub CLI · hubd v0.1 (demo) · gõ "hub help"</span>');
+  setTimeout(() => runPipeline(t9), 2500);
+}
+
+/* ================== WIRING ================== */
+document.getElementById('tg-form').addEventListener('submit', e => { e.preventDefault(); const i = document.getElementById('tg-input'); tgSend(i.value); i.value = ''; });
+document.getElementById('cli-form').addEventListener('submit', e => { e.preventDefault(); const i = document.getElementById('cli-input'); cliRun(i.value); i.value = ''; });
+document.getElementById('speed').addEventListener('change', e => { S.speed = +e.target.value; });
+seed();
+render();
+</script>
+</body>
+</html>

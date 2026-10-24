@@ -1,0 +1,8 @@
+﻿# Windsurf Cascade Rules
+
+<!-- HARNESS:BEGIN -->
+Adhere strictly to the Atomic Engineering Protocol defined in AGENTS.md and docs/WORKFLOW.md.
+- Read SPEC.md and AGENTS.md before taking any architectural actions.
+- Maintain single-module boundaries and contract-first invariants.
+- Update the ðŸŽ« Resume Ticket in the active phase dossier before yielding.
+<!-- HARNESS:END -->
